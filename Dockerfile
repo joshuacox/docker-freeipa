@@ -3,6 +3,10 @@ FROM fedora:21
 
 MAINTAINER Jan Pazdziora
 
+# force ipv4
+RUN echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.d/ipv6.conf
+RUN echo 'net.ipv6.conf.eth0.disable_ipv6 = 1' >> /etc/sysctl.d/ipv6.conf
+
 # Install FreeIPA server
 RUN mkdir -p /run/lock ; yum install -y freeipa-server bind bind-dyndb-ldap perl && yum clean all
 
