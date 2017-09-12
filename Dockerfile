@@ -1,6 +1,8 @@
 # Clone from the Fedora 21 image
 FROM fedora:21
 
+ENV FREEIPA_UPDATED 20160101
+
 MAINTAINER Jan Pazdziora
 
 # Install FreeIPA server
