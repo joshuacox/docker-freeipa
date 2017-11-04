@@ -1,7 +1,7 @@
 # Clone from the Fedora 21 image
 FROM fedora:21
 
-ENV FREEIPA_UPDATED=20171021
+ENV FREEIPA_UPDATED=20171104
 
 MAINTAINER Jan Pazdziora
 
