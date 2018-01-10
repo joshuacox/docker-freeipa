@@ -3,10 +3,9 @@
 This repository contains the Dockerfile and associated assets for
 building a FreeIPA server Docker image from the official yum repo.
 
-Install docker 1.2+:
+Install docker 1.10+:
 
-    yum install -y docker-io	# on Fedoras
-    yum install -y docker	# on RHEL 7
+    yum install -y docker
 
 Start the service:
 
@@ -16,47 +15,70 @@ To build the image, run in the root of the repository:
 
     docker build -t freeipa-server .
 
+The repository contains multiple `Dockerfile`s for various
+operating systems. Use `-f` option to `docker build` to pick
+different than default target.
+
 Create directory which will hold the server data:
 
     mkdir /var/lib/ipa-data
 
-You can optionally put into this directory a file
+On SELinux enabled systems,
 
-    ipa-server-install-options
+    setsebool -P container_manage_cgroup 1
 
-with command line parameters to ipa-server-install command, one
-parameter per line. You probably want at least
-
-    --ds-password=The-directory-server-password
-    --admin-password=The-admin-password
-
-If you want to create a replica instead of master, put the GPG-encrypted
-replica information file to this directory, plus file
-
-    ipa-replica-install-options
-
-to instruct the container to create a replica. That file should contain
-command line parameters to the ipa-replica-install command, possibly at
-least
-
-    --password=The-directory-server-password
-    --admin-password=The-admin-password
+might be needed to enable running systemd in the containers.
 
 You then run the container with
 
     docker run --name freeipa-server-container -ti \
        -h ipa.example.test \
-       -v /var/lib/ipa-data:/data:Z freeipa-server
+       -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+       --tmpfs /run --tmpfs /tmp \
+       -v /var/lib/ipa-data:/data:Z freeipa-server [ opts ]
 
-If you do not specify the passwords in the ipa-server-install-options
-file, use `PASSWORD` environment variable via the `-e` option:
+Standard `ipa-server-install` will be started and you can configure
+the server. The `docker run` invocation also accepts command line
+parameters that will be passed to `ipa-server-install`, so
+unattended invocation is possible. Optionally, you can put into the
+directory mounted into /data (/var/lib/ipa-data in this example) a file
+
+    ipa-server-install-options
+
+with command line parameters to ipa-server-install command,
+for example
+
+    --realm=EXAMPLE.TEST
+    --ds-password=The-directory-server-password
+    --admin-password=The-admin-password
+
+and these options will also be used as parameters to `ipa-server-install`.
+
+If you want to instruct the container to create a replica, specify the
+command in the `docker run` parameters:
 
     docker run --name freeipa-server-container -ti \
-       -h ipa.example.test -e PASSWORD=Secret123 \
-       -v /var/lib/ipa-data:/data:Z freeipa-server
+       -h ipa.example.test \
+       -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+       --tmpfs /run --tmpfs /tmp \
+       -v /var/lib/ipa-data:/data:Z \
+       freeipa-server ipa-replica-install [ opts ]
 
-If the above fails with error about invalid value for flag -v
-and bad format for volumes, run
+The options will be passed to `ipa-replica-install` in the container.
+You can also put options to file
+
+    ipa-replica-install-options
+
+in the directory mounted to /data to this directory, for example with
+
+    --password=The-directory-server-password
+    --admin-password=The-admin-password
+
+If your setup is of Domain Level < 1, GPG-encrypted replica information
+file is also needed in the directory mounted to /data.
+
+If the above commands fail with error about invalid value for
+flag -v and bad format for volumes, run
 
     chcon -t svirt_sandbox_file_t /var/lib/ipa-data
 
@@ -68,11 +90,8 @@ later with `docker start`, `docker stop` and other commands.
 Command `ipa-server-install` is invoked non-interactively the first
 time the container is run.
 
-You can pass environment variable IPA_SERVER_INSTALL_OPTS with
-additional options that will be passed to ipa-server-install.
-
-The `-ti` parameters are optional and are used for get a terminal
-(useful for experimenting in the container).
+The `-ti` parameters are optional and are used for get a terminal,
+for interactive configuration sessions.
 
 The container can the be started and stopped:
 
@@ -92,6 +111,38 @@ address. Starting the server would then be
 	-p 88:88/udp -p 464:464/udp -p 123:123/udp -p 7389:7389 \
 	-p 9443:9443 -p 9444:9444 -p 9445:9445 ...
 
+If you have existing container with data volume, it should be safe
+to shut it down and run new one based on newer image, with the same
+data directory bind-mounted to /data. The container will detect
+that it is running with data produced by different image and attempt
+to upgrade the configuration and data. Of course, keeping backup
+of the data directory for cases when the upgrade process fails
+is recommended.
+
+# Configuring and running with atomic
+
+On platforms with `atomic` command available, the container can be
+configured with
+
+    atomic install [ --name $THE_NAME ] freeipa-server \
+	[ keywords for docker operation ] \
+	[ ipa-server-install | ipa-replica-install ] \
+	[ opts ]
+
+The keywords for docker operations are:
+
+    hostname $IPA_SERVER_HOSTNAME - docker run -h $IPA_SERVER_HOSTNAME
+    net-host - docker run --net=host, also uses host's hostname
+    publish - docker run -p 443:443 ... ; publish all ports of the IPA
+              container on host's interfaces
+    cap-add $CAPABILITY - docker run --cap-add=$CAPABILITY
+
+The container will use /var/lib/$THE_NAME to store the configuration
+and data. It the gets started with
+
+    atomic run [ --name $THE_NAME ] freeipa-server
+
+Version 1.12 of atomic is needed.
 
 # IPA-enrolled client in Docker
 
@@ -111,7 +162,24 @@ freeipa-server container directly:
 The first time this container runs, it invokes `ipa-client-install`
 with the given admin password.
 
-# Copyright 2014--2015 Jan Pazdziora
+# Debugging
+
+The container scripts provide some options for debugging:
+
+- Enable shell script tracing in both the top-level `init-data` script
+  and the `ipa-server-configure-first` script by setting the
+  `$DEBUG_TRACE` environment variable.
+
+- Disable container exit after script failure by setting the
+  `$DEBUG_NO_EXIT` environment variable.  After failure, the
+  container will continue running, and can be entered for debugging
+  with e.g. `docker exec -it freeipa-server-container bash`.
+
+Example usage:
+
+    docker run [...] -e DEBUG_TRACE=1 -e DEBUG_NO_EXIT=1 freeipa-server
+
+# Copyright 2014--2016 Jan Pazdziora
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
